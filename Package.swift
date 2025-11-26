@@ -1,4 +1,4 @@
-// swift-tools-version:5.0
+// swift-tools-version:6.2
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -26,8 +26,8 @@ let package = Package(
                         // Windows does not use POSIX mutex
                         .when(platforms: [.linux, .macOS])),
                 .define("MDB_USE_ROBUST", to: "0"),
-                .unsafeFlags(["-Wno-shorten-64-to-32"])
+                //.unsafeFlags(["-Wno-shorten-64-to-32"])
             ]),
     ],
-    cLanguageStandard: .c11
+    cLanguageStandard: .c2x
 )
