@@ -1,0 +1,4 @@
+module CLMDBInterop {
+    header "../libraries/liblmdb/lmdb.h"
+    export *
+}

@@ -1,0 +1,472 @@
+---
+# Hand-written API notes for the Swift-facing view of LMDB.
+#
+# These annotate `lmdb.h` exactly as upstream ships it: no header edits. They
+# apply only to the CLMDBInterop module (swift-include/module.modulemap), so
+# the original CLMDB module and its existing importers are unaffected.
+#
+# Only the functions the LMDB wrapper needs are annotated. Everything else
+# imports exactly as it would without this file.
+#
+# Reference: https://clang.llvm.org/docs/APINotes.html
+Name: CLMDBInterop
+
+Tags:
+# The opaque handles import as OpaquePointer without this -- no type safety and
+# an unsafe type under strict memory safety. Retain/release are `immortal`
+# because LMDB has no reference counting: lifetime is explicit (close / commit
+# / abort) and is owned by the non-copyable wrapper types.
+- Name: MDB_env
+  SwiftImportAs: reference
+  SwiftRetainOp: immortal
+  SwiftReleaseOp: immortal
+  # An environment may be shared between threads; transactions may not.
+  SwiftConformsTo: Swift.Sendable
+- Name: MDB_txn
+  SwiftImportAs: reference
+  SwiftRetainOp: immortal
+  SwiftReleaseOp: immortal
+- Name: MDB_cursor
+  SwiftImportAs: reference
+  SwiftRetainOp: immortal
+  SwiftReleaseOp: immortal
+# A plain C enum imports as a RawRepresentable struct with global constants.
+# `closed` makes it a real Swift enum: exhaustive, and the cases are named
+# below.
+- Name: MDB_cursor_op
+  EnumExtensibility: closed
+# Holds `void *me_mapaddr`, the fixed map address, which the wrapper never
+# reads. Same reasoning as MDB_val below.
+- Name: MDB_envinfo
+  SwiftSafety: safe
+- Name: MDB_val
+  SwiftSafety: safe
+  Fields:
+  - Name: mv_data
+    Nullability: O
+
+Enumerators:
+- Name: MDB_FIRST
+  SwiftName: first
+- Name: MDB_FIRST_DUP
+  SwiftName: firstDuplicate
+- Name: MDB_GET_BOTH
+  SwiftName: getBoth
+- Name: MDB_GET_BOTH_RANGE
+  SwiftName: getBothRange
+- Name: MDB_GET_CURRENT
+  SwiftName: getCurrent
+- Name: MDB_GET_MULTIPLE
+  SwiftName: getMultiple
+- Name: MDB_LAST
+  SwiftName: last
+- Name: MDB_LAST_DUP
+  SwiftName: lastDuplicate
+- Name: MDB_NEXT
+  SwiftName: next
+- Name: MDB_NEXT_DUP
+  SwiftName: nextDuplicate
+- Name: MDB_NEXT_MULTIPLE
+  SwiftName: nextMultiple
+- Name: MDB_NEXT_NODUP
+  SwiftName: nextKey
+- Name: MDB_PREV
+  SwiftName: previous
+- Name: MDB_PREV_DUP
+  SwiftName: previousDuplicate
+- Name: MDB_PREV_NODUP
+  SwiftName: previousKey
+- Name: MDB_SET
+  SwiftName: set
+- Name: MDB_SET_KEY
+  SwiftName: setKey
+- Name: MDB_SET_RANGE
+  SwiftName: setRange
+- Name: MDB_PREV_MULTIPLE
+  SwiftName: previousMultiple
+
+# Deliberately NOT annotated: `SwiftWrapper: struct` on the MDB_dbi typedef.
+# It would make handles a distinct type, but upstream reuses MDB_dbi for the
+# *count* argument of mdb_env_set_maxdbs, which would then demand a handle.
+# The wrapper's `Database` type provides the distinction instead.
+
+# Single-value out-parameters (`MDB_env **`, `MDB_dbi *`, `MDB_val *`) are
+# annotated as `counted_by: 1`. Combined with `NoEscape`, the importer then
+# emits a second overload taking `inout MutableSpan<T>`, which the wrapper
+# feeds from `CollectionOfOne(...).mutableSpan` -- no pointers, no `unsafe`.
+#
+# `SwiftName` must keep the original C arity, `self:` included.
+Functions:
+- Name: mdb_version
+  SwiftName: "mdb_version(major:minor:patch:)"
+  NullabilityOfRet: N
+  Parameters:
+  - Position: 0          # int *major
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+  - Position: 1          # int *minor
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+  - Position: 2          # int *patch
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+- Name: mdb_strerror
+  NullabilityOfRet: N
+
+# MARK: Environment
+
+- Name: mdb_env_create
+  SwiftName: "MDB_env.create(_:)"
+  Parameters:
+  - Position: 0          # MDB_env **env
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+- Name: mdb_env_open
+  SwiftName: "MDB_env.open(self:path:flags:mode:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+  - Position: 1          # const char *path
+    NoEscape: true
+    Nullability: N
+- Name: mdb_env_close
+  SwiftName: "MDB_env.close(self:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+- Name: mdb_env_set_mapsize
+  SwiftName: "MDB_env.setMapSize(self:_:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+- Name: mdb_env_set_maxdbs
+  SwiftName: "MDB_env.setMaxDatabases(self:_:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+
+# MARK: Transactions
+
+- Name: mdb_txn_begin
+  SwiftName: "MDB_env.beginTransaction(self:parent:flags:_:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+  - Position: 1          # MDB_txn *parent, NULL for a top-level transaction
+    Nullability: O
+  - Position: 3          # MDB_txn **txn
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+- Name: mdb_txn_commit
+  SwiftName: "MDB_txn.commit(self:)"
+  Parameters:
+  - Position: 0          # txn
+    Nullability: N
+- Name: mdb_txn_abort
+  SwiftName: "MDB_txn.abort(self:)"
+  Parameters:
+  - Position: 0          # txn
+    Nullability: N
+
+# MARK: Databases and data
+
+- Name: mdb_dbi_open
+  SwiftName: "MDB_txn.openDatabase(self:name:flags:_:)"
+  Parameters:
+  - Position: 0          # txn
+    Nullability: N
+  - Position: 1          # const char *name, NULL for the main database
+    NoEscape: true
+    Nullability: O
+  - Position: 3          # MDB_dbi *dbi
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+- Name: mdb_get
+  SwiftName: "MDB_txn.get(self:_:key:data:)"
+  Parameters:
+  - Position: 0          # txn
+    Nullability: N
+  - Position: 2          # MDB_val *key
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+  - Position: 3          # MDB_val *data, filled in with a pointer into the map
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+- Name: mdb_put
+  SwiftName: "MDB_txn.put(self:_:key:data:flags:)"
+  Parameters:
+  - Position: 0          # txn
+    Nullability: N
+  - Position: 2          # MDB_val *key
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+  - Position: 3          # MDB_val *data
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+
+# MARK: Cursors
+
+- Name: mdb_cursor_open
+  SwiftName: "MDB_txn.openCursor(self:_:_:)"
+  Parameters:
+  - Position: 0          # txn
+    Nullability: N
+  - Position: 2          # MDB_cursor **cursor
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+- Name: mdb_cursor_close
+  SwiftName: "MDB_cursor.close(self:)"
+  Parameters:
+  - Position: 0          # cursor
+    Nullability: N
+- Name: mdb_cursor_get
+  SwiftName: "MDB_cursor.get(self:key:data:op:)"
+  Parameters:
+  - Position: 0          # cursor
+    Nullability: N
+  - Position: 1          # MDB_val *key, input for SET*/GET_BOTH*, output otherwise
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+  - Position: 2          # MDB_val *data, input for GET_BOTH*, output otherwise
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+- Name: mdb_cursor_put
+  SwiftName: "MDB_cursor.put(self:key:data:flags:)"
+  Parameters:
+  - Position: 0          # cursor
+    Nullability: N
+  - Position: 1          # MDB_val *key
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+  - Position: 2          # MDB_val *data
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+- Name: mdb_cursor_del
+  SwiftName: "MDB_cursor.delete(self:flags:)"
+  Parameters:
+  - Position: 0          # cursor
+    Nullability: N
+- Name: mdb_cursor_count
+  SwiftName: "MDB_cursor.duplicateCount(self:_:)"
+  Parameters:
+  - Position: 0          # cursor
+    Nullability: N
+  - Position: 1          # mdb_size_t *countp
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+
+# MARK: Configuration
+
+- Name: mdb_env_set_flags
+  SwiftName: "MDB_env.setFlags(self:_:enabled:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+- Name: mdb_env_get_flags
+  SwiftName: "MDB_env.getFlags(self:_:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+  - Position: 1          # unsigned int *flags
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+- Name: mdb_env_set_maxreaders
+  SwiftName: "MDB_env.setMaxReaders(self:_:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+- Name: mdb_env_get_maxreaders
+  SwiftName: "MDB_env.getMaxReaders(self:_:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+  - Position: 1          # unsigned int *readers
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+- Name: mdb_env_get_maxkeysize
+  SwiftName: "getter:MDB_env.maxKeySize(self:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+- Name: mdb_dbi_flags
+  SwiftName: "MDB_txn.databaseFlags(self:_:_:)"
+  Parameters:
+  - Position: 0          # txn
+    Nullability: N
+  - Position: 2          # unsigned int *flags
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+
+# MARK: Deleting
+
+- Name: mdb_del
+  SwiftName: "MDB_txn.delete(self:_:key:data:)"
+  Parameters:
+  - Position: 0          # txn
+    Nullability: N
+  - Position: 2          # MDB_val *key
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+  - Position: 3          # MDB_val *data: NULL deletes every value of the key
+    # `counted_by_or_null`, not `counted_by`: with the latter the generated
+    # overload takes a non-optional MutableSpan even with `Nullability: O`,
+    # leaving no way to pass NULL through it.
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by_or_null, BoundedBy: 1 }
+    Nullability: O
+- Name: mdb_drop
+  SwiftName: "MDB_txn.drop(self:_:delete:)"
+  Parameters:
+  - Position: 0          # txn
+    Nullability: N
+
+# MARK: Statistics and maintenance
+
+- Name: mdb_stat
+  SwiftName: "MDB_txn.statistics(self:_:_:)"
+  Parameters:
+  - Position: 0          # txn
+    Nullability: N
+  - Position: 2          # MDB_stat *stat
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+- Name: mdb_env_stat
+  SwiftName: "MDB_env.statistics(self:_:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+  - Position: 1          # MDB_stat *stat
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+- Name: mdb_env_info
+  SwiftName: "MDB_env.info(self:_:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+  - Position: 1          # MDB_envinfo *stat
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+- Name: mdb_env_sync
+  SwiftName: "MDB_env.sync(self:force:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+- Name: mdb_env_copy2
+  SwiftName: "MDB_env.copy(self:to:flags:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+  - Position: 1          # const char *path
+    NoEscape: true
+    Nullability: N
+- Name: mdb_env_copyfd2
+  SwiftName: "MDB_env.copy(self:toFileDescriptor:flags:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+- Name: mdb_env_get_path
+  SwiftName: "MDB_env.getPath(self:_:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+  - Position: 1          # const char **path
+    # Deliberately no `counted_by: 1`. The element would be a pointer, so a
+    # span adds no safety, and the generated overload for a
+    # MutableSpan<UnsafePointer<CChar>?> does not mark its own unsafe
+    # operations, which fails the build under
+    # `.treatWarning("StrictMemorySafety", as: .error)`.
+    Nullability: N
+- Name: mdb_reader_check
+  SwiftName: "MDB_env.checkReaders(self:_:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+  - Position: 1          # int *dead
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+
+# MARK: Transaction reuse, comparison, introspection
+
+- Name: mdb_txn_id
+  SwiftName: "getter:MDB_txn.id(self:)"
+  Parameters:
+  - Position: 0          # txn
+    Nullability: N
+- Name: mdb_txn_reset
+  SwiftName: "MDB_txn.reset(self:)"
+  Parameters:
+  - Position: 0          # txn
+    Nullability: N
+- Name: mdb_txn_renew
+  SwiftName: "MDB_txn.renew(self:)"
+  Parameters:
+  - Position: 0          # txn
+    Nullability: N
+- Name: mdb_cmp
+  SwiftName: "MDB_txn.compare(self:_:_:_:)"
+  Parameters:
+  - Position: 0          # txn
+    Nullability: N
+  - Position: 2          # const MDB_val *a
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+  - Position: 3          # const MDB_val *b
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+- Name: mdb_dcmp
+  SwiftName: "MDB_txn.compareDuplicates(self:_:_:_:)"
+  Parameters:
+  - Position: 0          # txn
+    Nullability: N
+  - Position: 2          # const MDB_val *a
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+  - Position: 3          # const MDB_val *b
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+- Name: mdb_env_get_fd
+  SwiftName: "MDB_env.getFileDescriptor(self:_:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+  - Position: 1          # mdb_filehandle_t *fd
+    NoEscape: true
+    BoundsSafety: { Kind: counted_by, BoundedBy: 1 }
+    Nullability: N
+- Name: mdb_reader_list
+  SwiftName: "MDB_env.listReaders(self:_:context:)"
+  Parameters:
+  - Position: 0          # env
+    Nullability: N
+  - Position: 1          # MDB_msg_func *func
+    Nullability: N
+  - Position: 2          # void *ctx
+    Nullability: O
