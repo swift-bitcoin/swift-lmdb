@@ -1544,7 +1544,7 @@ struct MDB_env {
 #if !(MDB_MAXKEYSIZE)
 	unsigned int	me_maxkey;	/**< max size of a key */
 #endif
-	int		me_live_reader;		/**< have liveness lock in reader table */
+	_Atomic int	me_live_reader;		/**< have liveness lock in reader table */ // Changed to _Atomic to support IndexStoreDB
 #ifdef _WIN32
 	int		me_pidquery;		/**< Used in OpenProcess */
 	OVERLAPPED	*ov;			/**< Used for for overlapping I/O requests */
@@ -3704,8 +3704,9 @@ mdb_page_flush(MDB_txn *txn, int keep)
 #else
 	struct iovec iov[MDB_COMMIT_PAGES];
 	HANDLE fd = env->me_fd;
+	ssize_t wres;
 #endif
-	ssize_t		wsize = 0, wres;
+	ssize_t		wsize = 0;
 	MDB_OFF_T	wpos = 0, next_pos = 1; /* impossible pos, so pos != next_pos */
 	int			n = 0;
 
@@ -3873,10 +3874,11 @@ retry_seek:
 		* We start with the last one so that all the others should already be complete and
 		* we reduce thread suspend/resuming (in practice, typically about 99.5% of writes are
 		* done after the last write is done) */
+		DWORD ovres;
 		rc = 0;
 		while (--async_i >= 0) {
 			if (ov[async_i].hEvent) {
-				if (!GetOverlappedResult(fd, &ov[async_i], &wres, TRUE)) {
+				if (!GetOverlappedResult(fd, &ov[async_i], &ovres, TRUE)) {
 					rc = ErrCode(); /* Continue on so that all the event signals are reset */
 				}
 			}
